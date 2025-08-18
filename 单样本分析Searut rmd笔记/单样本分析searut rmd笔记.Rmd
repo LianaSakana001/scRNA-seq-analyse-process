@@ -1,0 +1,134 @@
+---
+title: "单样本分析：Searut PBMC实战"
+author: "Liana"
+date: "`r Sys.Date()`"
+output:
+  rmdformats::downcute:
+    self_contained: true
+    default_style: "light"
+    downcute_theme: "default"
+---
+
+
+```{r setup, include=FALSE}
+## Global options
+knitr::opts_chunk$set(cache = TRUE, collapse=T, comment="", prompt=T)
+```
+
+# **前言-Introduction**
+本次笔记的目标是学习单细胞RNA测序（scRNA-seq）单样本分析流程，使用Seurat包进行数据处理。
+
+### **1.数据集**：
+使用的是10X Genomics公司提供的公开数据集，包含2700个从健康人外周血中分离出来的单个核细胞（PBMC, Peripheral Blood Monouclear Cells）。
+
+### **2.分析目的**：
+* 细胞质控，过滤低质量细胞。
+* 数据降维，分群，寻找marker基因。
+* 根据marker基因，对分群的细胞注释。
+
+### **3.笔记学习目标**：
+理解每一步的分析含义，理解参数，解读结果。
+
+# **单样本分析流程-Single-sample analysis process**
+## **1. 加载包、读取数据并创建Searut对象**
+分析的第一步是加载所需的R包，然后读取10X genomics的输出文件。
+
+### **1.1 下载并加载包**
+```{r install R pacages, echo=TRUE, results="hide"}
+if(!require(multtest))BiocManager::install("multtest")
+if(!require(Seurat))install.packages("Seurat")
+if(!require(dplyr))install.packages("dplyr")
+if(!require(patchwork))install.packages("patchwork")
+if(!require(R.utils))install.packages("R.utils")
+library(Seurat)
+library(dplyr)
+library(patchwork)
+```
+
+**multtest**：提供多重检验校正的工具，用于处理统计分析中因为多次假设检验导致的“假阳性率升高”的问题。常用情景-在差异表达分析（如单细胞种不同细胞群的基因表达差异）中，对大量基因的P值进行校正，确保统计可靠。
+
+**Seurat**：专门用于单细胞RNA测序（scRNA-seq）数据的整合、质控、聚类、可视化和注释等全流程分析。
+
+**dplyr**：提供简捷高效的语法，用于数据框（dataframe）的清洗、筛选、分组、汇总等操作。在单细胞分析中，常用来处理元数据（metadata），如根据细胞类型筛选细胞、计算某群细胞的平均表达量等。
+
+**patchwork**：在单细胞分析中，常用来组合 UMAP 图（展示细胞分群）、基因表达小提琴图、标记基因热图等，让结果展示更直观、美观。
+
+**R.utils**：提供一系列辅助函数，用于文件处理、系统操作、错误处理等。在单细胞分析中，可辅助处理大型测序数据文件（如 .mtx、.rds 等）的读写和路径管理。
+
+### **1.2 读入数据**
+```{r}
+#文件目录
+setwd("/Users/askeladd/Desktop/R+Python/单样本分析测试数据及代码/") #切换至工作目录
+pbmc.data <- Read10X(data.dir = "filtered_gene_bc_matrices/hg19/")
+```
+
+读取的10X数据包含3个文件：barcodes.tsv（细胞识别码）,genes.tsv（基因名）,matrix.mtx（基因表达矩阵）。运行后会在Environment产生一个名为pbmc.data的系数矩阵（dgCMatrix）文件。
+
+### **1.3 创建Seurat分析对象**
+```{r}
+pbmc <- CreateSeuratObject(counts = pbmc.data, project = "pbmc3k", min.cells = 3, min.features = 200)
+pbmc
+ncol(pbmc) #ncol用于获得二维数据的列数，单细胞中列为细胞，行为基因，所以返回细胞数。
+ncol(pbmc.data) #和pbmc数据一致说明初步的质控所有细胞均满足要求。
+```
+代码执行完后，我们创建了一个名为pbmc的Seurat对象，这是整个分析的核心。
+
+* pbmc存储了所有细胞的基因表达矩阵（assays）、细胞的元数据（meta.data）
+* 从输出的数据可以看到这个数据集包括13714个基因（features）和2700个细胞。
+
+
+### **1.4 表达矩阵输出为一个txt文件（可选）**
+```{r, eval=FALSE}
+lalala <- as.data.frame(pbmc[["RNA"]]@counts)
+write.table(lalala,'mycount.txt',sep = '\t')#表达矩阵可以这么存出来
+```
+
+
+
+## **2. 数据质控及可视化**
+```{r}
+# [[ ]]符号可以用来访问pbmc对象的元数据(meta.data)
+pbmc[["percent.mt"]] <- PercentageFeatureSet(pbmc, pattern = "^MT-")
+
+# 使用小提琴图(VlnPlot)可视化QC指标，确定质控阈值
+VlnPlot(pbmc, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3)
+
+# 也可以使用散点图可视化，确定质控阈值
+plot1 <- FeatureScatter(pbmc, feature1 = "nCount_RNA", feature2 = "percent.mt")
+plot2 <- FeatureScatter(pbmc, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+CombinePlots(plots = list(plot1, plot2)) 
+
+# 过滤
+pbmc <- subset(pbmc, subset = nFeature_RNA > 200 & nFeature_RNA < 2500 & percent.mt < 5)   
+ncol(pbmc)
+
+```
+我们需要过滤掉死细胞或者包含了两个以上细胞的“双细胞”。质控常用的指标是：
+
+* nFeature_RNA：每个细胞检测到的基因数。太少可能是死细胞，太多可能是双细胞。
+* nCount_RNA：每个细胞中检测到的总分字数（UMI数）
+* percent.mt：线粒体基因百分比。比例过高意味着细胞状态不佳，即将凋亡。
+
+## **3. 数据标准化与高变基因**
+```{r, fig.width=10, fig.height=6}
+# 标准化
+pbmc <- NormalizeData(pbmc, normalization.method = "LogNormalize", scale.factor = 10000)
+
+# 寻找高变基因
+pbmc <- FindVariableFeatures(pbmc, selection.method = "vst", nfeatures = 2000)
+
+# 查看最高变的10个基因
+top10 <- head(VariableFeatures(pbmc), 10)
+
+# 画出高变基因图
+plot1 <- VariableFeaturePlot(pbmc)
+plot2 <- LabelPoints(plot = plot1, points = top10, repel = TRUE)
+plot1 + plot2
+```
+
+**数据标准化**：消除细胞测序深度的差异影响，使不同细胞的基因表达量具有可比性。
+
+**高变基因**：针对于后续PCA、聚类步骤，聚集于真正反映细胞间生物学差异的基因，过滤掉无信息或噪音的基因。单细胞数据中包含大量基因通常1-2万个，但大多数基因的表达变异是“无意义”的。高变基因通常保留1000-3000个不同细胞中表达量差异很大的基因，主要让PCA、聚类等核心分析聚焦于生物学差异信号，从而降低噪音。
+
+## **4. 降维与聚类**
+
