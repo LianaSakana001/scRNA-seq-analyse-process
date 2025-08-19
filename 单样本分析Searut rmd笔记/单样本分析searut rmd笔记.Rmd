@@ -34,7 +34,7 @@ knitr::opts_chunk$set(cache = TRUE, collapse=T, comment="", prompt=T)
 分析的第一步是加载所需的R包，然后读取10X genomics的输出文件。
 
 ### **1.1 下载并加载包**
-```{r install R pacages, echo=TRUE, results="hide"}
+```{r install R pacages, echo=TRUE, results="hide", message=FALSE, warning=FALSE}
 if(!require(multtest))BiocManager::install("multtest")
 if(!require(Seurat))install.packages("Seurat")
 if(!require(dplyr))install.packages("dplyr")
@@ -56,7 +56,7 @@ library(patchwork)
 **R.utils**：提供一系列辅助函数，用于文件处理、系统操作、错误处理等。在单细胞分析中，可辅助处理大型测序数据文件（如 .mtx、.rds 等）的读写和路径管理。
 
 ### **1.2 读入数据**
-```{r}
+```{r 读入10X数据}
 #文件目录
 setwd("/Users/askeladd/Desktop/R+Python/单样本分析测试数据及代码/") #切换至工作目录
 pbmc.data <- Read10X(data.dir = "filtered_gene_bc_matrices/hg19/")
@@ -65,7 +65,7 @@ pbmc.data <- Read10X(data.dir = "filtered_gene_bc_matrices/hg19/")
 读取的10X数据包含3个文件：barcodes.tsv（细胞识别码）,genes.tsv（基因名）,matrix.mtx（基因表达矩阵）。运行后会在Environment产生一个名为pbmc.data的系数矩阵（dgCMatrix）文件。
 
 ### **1.3 创建Seurat分析对象**
-```{r}
+```{r 创建Seurat分析对象}
 pbmc <- CreateSeuratObject(counts = pbmc.data, project = "pbmc3k", min.cells = 3, min.features = 200)
 pbmc
 ncol(pbmc) #ncol用于获得二维数据的列数，单细胞中列为细胞，行为基因，所以返回细胞数。
@@ -78,7 +78,7 @@ ncol(pbmc.data) #和pbmc数据一致说明初步的质控所有细胞均满足�
 
 
 ### **1.4 表达矩阵输出为一个txt文件（可选）**
-```{r, eval=FALSE}
+```{r 输出矩阵为txt文件, eval=FALSE}
 lalala <- as.data.frame(pbmc[["RNA"]]@counts)
 write.table(lalala,'mycount.txt',sep = '\t')#表达矩阵可以这么存出来
 ```
@@ -86,31 +86,39 @@ write.table(lalala,'mycount.txt',sep = '\t')#表达矩阵可以这么存出来
 
 
 ## **2. 数据质控及可视化**
-```{r}
+### **2.1 质控前数据可视化-小提琴图，确定质控阈值**
+```{r 质控前可视化-小提琴图, warning=FALSE, fig.cap="Fig.1 小提琴图-质控常用指标"}
 # [[ ]]符号可以用来访问pbmc对象的元数据(meta.data)
 pbmc[["percent.mt"]] <- PercentageFeatureSet(pbmc, pattern = "^MT-")
-
 # 使用小提琴图(VlnPlot)可视化QC指标，确定质控阈值
 VlnPlot(pbmc, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3)
-
-# 也可以使用散点图可视化，确定质控阈值
-plot1 <- FeatureScatter(pbmc, feature1 = "nCount_RNA", feature2 = "percent.mt")
-plot2 <- FeatureScatter(pbmc, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
-CombinePlots(plots = list(plot1, plot2)) 
-
-# 过滤
-pbmc <- subset(pbmc, subset = nFeature_RNA > 200 & nFeature_RNA < 2500 & percent.mt < 5)   
-ncol(pbmc)
-
 ```
-我们需要过滤掉死细胞或者包含了两个以上细胞的“双细胞”。质控常用的指标是：
+**质控常用的指标**：我们需要过滤掉死细胞或者包含了两个以上细胞的“双细胞”
 
 * nFeature_RNA：每个细胞检测到的基因数。太少可能是死细胞，太多可能是双细胞。
 * nCount_RNA：每个细胞中检测到的总分字数（UMI数）
 * percent.mt：线粒体基因百分比。比例过高意味着细胞状态不佳，即将凋亡。
 
+**质控阈值的确定**：确保绝大部分细胞被保留。如这里选择nFeature_RNA(200,2500)，percent.mt(0,5)
+
+### **2.2 质控前数据可视化-散点图（可选）**
+```{r 质控前可视化-散点图, warning=FALSE, fig.cap="Fig.2 散点图"}
+# 也可以使用散点图可视化，确定质控阈值
+plot1 <- FeatureScatter(pbmc, feature1 = "nCount_RNA", feature2 = "percent.mt")
+plot2 <- FeatureScatter(pbmc, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+CombinePlots(plots = list(plot1, plot2)) 
+```
+
+### **2.3 过滤**
+```{r 过滤, warning=FALSE}
+# 过滤
+pbmc <- subset(pbmc, subset = nFeature_RNA > 200 & nFeature_RNA < 2500 & percent.mt < 5)   
+ncol(pbmc)
+```
+
+
 ## **3. 数据标准化与高变基因**
-```{r, fig.width=10, fig.height=6}
+```{r 数据标准化与寻找高变基因, fig.width=10, fig.height=6, fig.cap="Fig.3 高变基因"}
 # 标准化
 pbmc <- NormalizeData(pbmc, normalization.method = "LogNormalize", scale.factor = 10000)
 
@@ -126,9 +134,140 @@ plot2 <- LabelPoints(plot = plot1, points = top10, repel = TRUE)
 plot1 + plot2
 ```
 
-**数据标准化**：消除细胞测序深度的差异影响，使不同细胞的基因表达量具有可比性。
+**数据标准化**：消除细胞测序深度的差异影响，使不同细胞的基因表达量具有可比性。标准化后的基因表达量就具备了可比性，后续查看某一基因在不同分群间的表达量就是基于这一步骤。
 
 **高变基因**：针对于后续PCA、聚类步骤，聚集于真正反映细胞间生物学差异的基因，过滤掉无信息或噪音的基因。单细胞数据中包含大量基因通常1-2万个，但大多数基因的表达变异是“无意义”的。高变基因通常保留1000-3000个不同细胞中表达量差异很大的基因，主要让PCA、聚类等核心分析聚焦于生物学差异信号，从而降低噪音。
 
 ## **4. 降维与聚类**
+### **4.1 ScaleData(标准化缩放)**
+```{r 标准化缩放, echo=TRUE, results='hide', message=FALSE, warning=FALSE}
+#pbmc <- ScaleData(pbmc, features = rownames(pbmc)) ##scale全部基因
+pbmc <- ScaleData(pbmc) ##默认用高变基因来scale
+
+```
+
+**ScaleData(标准化缩放)**：是单细胞数据预处理的关键，用于对基因表达数据进行标准化缩放。
+<p style="margin-top: -10px;">
+（1） 消除不同基因表达量的“量级差异”，使每个基因的表达变化在后续分析具有相同权重：虽然前面的NormalizeData已经消除了细胞间的测序深度的差异，但不同基因的表达量范围可能差异极大（例如，基因A的表达量范围是0-5，基因B是0-20），通过“中心化+标准化”，将不同基因表达量转化为一个量级（均值为0，标准差为1），确保每个基因的表达变化被公平对待。
+
+* 中心化（Centering）：计算其在所有细胞中的平均表达量，然后将每个细胞中该基因表达量减去这个平均值。
+```{r 中心化计算公式, fig.width=6, fig.height=4,echo=FALSE, fig.cap="Fig.4 中心化", fig.align="center"}
+knitr::include_graphics("images/图片 1.png")
+```
+处理后，基因的平均表达量变为0，正值表示该细胞的中基因表达高于平均值，负值表示低于平均水平。
+
+* 标准化（Scaling）：对中心化后的表达量，再除以该基因在所有细胞中的标准差，
+```{r Scaling, fig.width=6, fig.height=4,echo=FALSE, fig.cap="Fig.5 标准化", fig.align="center"}
+knitr::include_graphics("images/图片 2.png")
+```
+处理后，每个基因在不同细胞中的标准差均变为1，所有基因的表达量被统一到相同量级（一般在-2到2间）。
+
+（2） 目的：这种标准化处理（将所有基因的标准差统一为1），核心目的是实现基因自身的纵向比对 —— 即衡量某个基因在特定细胞中的表达量相较于其在所有细胞中的平均水平，高出或低出多少个自身标准差；而非用于不同基因间的横向比较（例如，数值 “3” 仅代表该基因表达量偏离自身均值3个标准差，不意味着与其他基因的“3”具有相同的绝对表达差异）。
+
+
+
+### **4.2 PCA降维与dims**
+```{r PCA降维, echo=TRUE, results='hide', message=FALSE, warning=FALSE, fig.cap="Fig.6 Elbow plot", fig.align="center"}
+pbmc <- RunPCA(pbmc, features = VariableFeatures(object = pbmc))
+library(ggplot2)
+ElbowPlot(pbmc, ndims = 50)  # 展示前50个主成分，拐点处为保留的dims
+```
+
+```{r PCA降维-dims选择, echo=TRUE, results='hide', message=FALSE, warning=FALSE, fig.cap="Fig.7 不同dims的降维图", fig.align="center"}
+# 测试4个候选dims（如10、20、25、30）
+for (d in c(10, 20, 25, 30)) {
+  pbmc <- FindNeighbors(pbmc, dims = 1:d) %>% 
+    FindClusters(resolution = 0.5)  # 用中等分辨率初步聚类
+  p <- DimPlot(pbmc, label = TRUE) + 
+    ggtitle(paste("dims =", d) + 
+    coord_fixed() ) # 固定x/y轴比例为1:1，避免拉伸
+  # 新增：将每个图存入列表（关键步骤）
+  assign(paste0("p", d), p)  # 用p10、p20、p25、p30存储各图
+}
+# 新增：合并图形的代码
+library(patchwork)  # 加载拼图包（如果未加载过）
+
+# 合并4张图（2行2列）
+combined_plot <- p10 + p20 + p25 + p30 +
+  plot_layout(ncol = 2, 
+              nrow = 2,) +  
+  plot_annotation(title = "different dims")  # 总标题
+
+# 显示合并后的图
+print(combined_plot)
+
+```
+
+**主成分分析（PCA, Principal Component Analysis）**:
+一种最广泛的数据降维算法，将n维特征映射到k维上，得到的新的维度就是“主成分”（Principal Components）。dimensions（dims）指的是“保留的主成分”，即映射到的k维，用于后续分析聚类、UMAP可视化中使用的主成分数量。
+
+**dims值的选择**：通常dims的选择是依照Elbow Plot的拐点前的成分作为主要信号，拐点后为噪声。根据肘图可以选择dims为10，用于后续聚类和UMAP可视化。
+
+
+### **4.3 聚类及resolution**
+```{r 聚类, echo=TRUE, results='hide', message=FALSE, warning=FALSE, fig.cap="Fig.8 clustree", fig.align="center", fig.height=6}
+pbmc <- FindNeighbors(pbmc, dims = 1:10)
+
+if (!require("clustree")) install.packages("clustree")
+library(clustree)
+# 假设已确定dims=10，测试多个resolution（0.1-1.0）
+dims_fixed <- 10  # 固定dims
+resolutions <- c(0.1, 0.2, 0.4, 0.5, 0.6, 0.8, 1.0)  # 不同分辨率
+
+# 批量计算不同resolution的聚类结果，并保存到meta.data中
+for (res in resolutions) {
+  # 计算聚类（基于固定dims）
+  pbmc <- FindNeighbors(pbmc, dims = 1:dims_fixed) %>% 
+    FindClusters(resolution = res)
+  
+  # 将当前resolution的聚类结果保存到新的元数据列（命名格式：res.0.1, res.0.2等）
+  cluster_col <- paste0("res.", res)
+  pbmc@meta.data[[cluster_col]] <- Idents(pbmc)
+}
+
+# 4. 用clustree绘制不同resolution的聚类演变树
+clustree(
+  pbmc, 
+  prefix = "res.",  # 匹配元数据中以"res."开头的聚类列
+  layout = "sugiyama",  # 树状布局，适合展示演变关系
+  node_size = 6,  # 节点大小（集群中细胞数量）
+  edge_width = 2,  # 边的粗细（细胞流动比例）
+  label_size = 5,  # 集群编号字体大小
+  title = "不同resolution下的聚类演变关系"
+)
+
+```
+**FindNeighbors-构建细胞临近图**：基于dims指定的主成分（前十个PC）计算细胞间的距离（通常用欧氏距离）；对每个细胞，筛选出K个细胞（默认k=20）作为邻居并通过距离计算边的权重（距离越近，权重越高）。最后生成的近邻图存储在pbmc@graphs中，用于后续聚类。
+<p style="margin-top: -10px;">
+* 细胞距离-欧氏距离：10个维度，每个细胞对应10个坐标，细胞A（a1,a2,…,a10）,细胞B（b1,b2,…,b10），距离越小代表两个细胞在低维空间越相似。距离(A,B) = 
+```{r, fig.width=6, fig.height=4,echo=FALSE, fig.cap="Fig.9 细胞距离计算", fig.align="center"}
+knitr::include_graphics("images/图片 3.png")
+```
+
+* 近邻图：一个抽象的网络结构，并非可视化图像。每一个细胞是一个节点（node），边是两节两个节点的线，边的属性-包含权重（代表相似强度）。
+
+* 筛选临近：每个细胞只筛选并保留距离最近的20个细胞（默认为20个，可修改）。计算保存距离信息，并初步得到哪些细胞可能是相似的。
+
+* 计算权重：即边的权重，衡量两个细胞相似强度的数值。距离越近，权重越高，越有可能是一群细胞。
+
+**FindClusters-基于近邻图聚类**：通过聚类算法Louvain算法分析全图的边权重分布来确认边界。其目的是找到“模块性最高”的划分方式——简单来说就是让群内的边权重总和尽可能高，群间的边权重总和尽可能低。
+
+* 群内-相似性高的细胞被优先化到同一群，形成紧密的“内部连接”；群间-低权重边或无边区域，形成自然的群边界。
+
+* 输出的每个细胞的簇标签（如0、1…），存储在pbmc$seurat_clusters中，用于后续注释和可视化。
+
+* resolution参数选择：分辨率，值越高，划分的群越多越细。可以用clustree包来看不同分辨率分群结果。结合clustree以及测序部位的细胞种类来最终选择resolution，这里选择0.5（searut官网选择）。
+
+### **4.4 聚类的可视化**
+FindNeighbors（建图）→ FindClusters（分群，得到标签）→ UMAP/t-SNE（可视化分群结果）
+```{r}
+# t-SNE可视化
+pbmc <- RunTSNE(pbmc, dims = 1:10)
+DimPlot(pbmc, reduction = "tsne", group.by = "res.0.5", label = TRUE, label.size = 4)
+# UMAP可视化
+pbmc <- RunUMAP(pbmc, dims = 1:10)
+DimPlot(pbmc, reduction = "umap", group.by = "res.0.5", label = TRUE, label.size = 4)
+```
+
+
 
