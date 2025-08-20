@@ -134,9 +134,22 @@ plot2 <- LabelPoints(plot = plot1, points = top10, repel = TRUE)
 plot1 + plot2
 ```
 
-**数据标准化**：消除细胞测序深度的差异影响，使不同细胞的基因表达量具有可比性。标准化后的基因表达量就具备了可比性，后续查看某一基因在不同分群间的表达量就是基于这一步骤。
+**NormalizeData-数据标准化**：消除细胞测序深度的差异影响，使不同细胞的同一基因表达量具有可比性。基因的原始计数为counts(即该基因在细胞中被检测到的reads数)。分为两步实现：
 
-**高变基因**：针对于后续PCA、聚类步骤，聚集于真正反映细胞间生物学差异的基因，过滤掉无信息或噪音的基因。单细胞数据中包含大量基因通常1-2万个，但大多数基因的表达变异是“无意义”的。高变基因通常保留1000-3000个不同细胞中表达量差异很大的基因，主要让PCA、聚类等核心分析聚焦于生物学差异信号，从而降低噪音。
+* 文库大小标准化（library Size Normalization）：首先计算每个细胞的“总测序深度”（即该细胞中所有基因的原始计数之和，称为lib.size）,之后将每个基因的原始计数除以该细胞的总测序深度，再乘以scale.factor（默认10000），得到标准化计数（normalized counts），存储在pbmc@assays$RNA@data 。
+
+* 对数转换：log normalized counts=log(normalized counts+1)，加1是避免出现0值及负数。对数转换压缩基因表达量的极大值，并且使数据分布更接近于正态（如PCA、差异分析）。
+
+（1） 需要注意的是，NormalizeData消除了不同细胞间的测序深度偏差，但是其目的是关注同一个基因在不同细胞/细胞群间表达差异（是FindVariableFeatures，寻找高变基因的前提）。这种同一基因在不同细胞/细胞群的表达的高低，可能与该细胞群的功能相关（**生物学意义的核心来源**）。
+
+（2） 不同基因的同一细胞比较存在局限性，因为不同基因测序效率不同，且不同基因的表达量高低的比较没有生物学意义。
+
+**FindVariableFeatures-高变基因**：单细胞数据中包含大量基因通常1-2万个，但大多数基因的表达变异是“无意义”的。高变基因通常保留1000-3000个不同细胞中表达量差异显著的基因（因生物学因素而非随机噪音），这些基因是捕捉细胞异质性关键的生物标志物。
+
+* 单细胞基因的表达变异来源：生物学变异（细胞类型、功能状态等真实生物学差异导致的）；技术/随机噪音（测序随机误差、低表达基因的计数波动）-需要排除。FindVariableFeatures的核心就是区分两种变异，最终筛选出“生物学变异主导”
+
+* 计算过程：输入标准化计数（normalized counts）；计算每个基因的平均表达量（mean）和变异值（方差variance）；拟合“平均表达量-变异值”的预期关系，局部加权回归（LOESS）；计算校正后变异值（残差）；选择残差前2000的基因作为“高变基因”。
+
 
 ## **4. 降维与聚类**
 ### **4.1 ScaleData(标准化缩放)**
@@ -148,9 +161,9 @@ pbmc <- ScaleData(pbmc) ##默认用高变基因来scale
 
 **ScaleData(标准化缩放)**：是单细胞数据预处理的关键，用于对基因表达数据进行标准化缩放。
 <p style="margin-top: -10px;">
-（1） 消除不同基因表达量的“量级差异”，使每个基因的表达变化在后续分析具有相同权重：虽然前面的NormalizeData已经消除了细胞间的测序深度的差异，但不同基因的表达量范围可能差异极大（例如，基因A的表达量范围是0-5，基因B是0-20），通过“中心化+标准化”，将不同基因表达量转化为一个量级（均值为0，标准差为1），确保每个基因的表达变化被公平对待。
+（1） 消除不同基因表达量的“量级差异”，使每个基因的表达变化在后续分析具有相同权重：简单来说就是使，通过“中心化+标准化”，将不同基因表达量转化为一个量级（均值为0，标准差为1），确保每个基因的表达变化被公平对待。
 
-* 中心化（Centering）：计算其在所有细胞中的平均表达量，然后将每个细胞中该基因表达量减去这个平均值。
+* 中心化（Centering）：计算其在所有细胞中的平均表达量（基于NormalizeData后的对数标准化数据），然后将每个细胞中该基因表达量减去这个平均值。
 ```{r 中心化计算公式, fig.width=6, fig.height=4,echo=FALSE, fig.cap="Fig.4 中心化", fig.align="center"}
 knitr::include_graphics("images/图片 1.png")
 ```
@@ -164,7 +177,7 @@ knitr::include_graphics("images/图片 2.png")
 
 （2） 目的：这种标准化处理（将所有基因的标准差统一为1），核心目的是实现基因自身的纵向比对 —— 即衡量某个基因在特定细胞中的表达量相较于其在所有细胞中的平均水平，高出或低出多少个自身标准差；而非用于不同基因间的横向比较（例如，数值 “3” 仅代表该基因表达量偏离自身均值3个标准差，不意味着与其他基因的“3”具有相同的绝对表达差异）。
 
-
+（3） 与NormalizeData的比较：前者是解决细胞间测序深度偏差，让同一基因的表达量可以在不同细胞间比较-生物学意义的来源。而scaling则是解决不同基因的尺度差异，让数据可进行后续统计学分析，让下游分析（PCA、聚类）能正确捕捉基因表达的协同模式，而非直接得出 “哪个基因更重要” 的结论。
 
 ### **4.2 PCA降维与dims**
 ```{r PCA降维, echo=TRUE, results='hide', message=FALSE, warning=FALSE, fig.cap="Fig.6 Elbow plot", fig.align="center"}
@@ -199,7 +212,7 @@ print(combined_plot)
 ```
 
 **主成分分析（PCA, Principal Component Analysis）**:
-一种最广泛的数据降维算法，将n维特征映射到k维上，得到的新的维度就是“主成分”（Principal Components）。dimensions（dims）指的是“保留的主成分”，即映射到的k维，用于后续分析聚类、UMAP可视化中使用的主成分数量。
+一种最广泛的数据降维算法，将n维特征映射到k维上，得到的新的维度就是“主成分”（Principal Components）提取数据中最主要的变异来源。dimensions（dims）指的是“保留的主成分”，即映射到的k维，用于后续分析聚类、UMAP可视化中使用的主成分数量。
 
 **dims值的选择**：通常dims的选择是依照Elbow Plot的拐点前的成分作为主要信号，拐点后为噪声。根据肘图可以选择dims为10，用于后续聚类和UMAP可视化。
 
@@ -235,7 +248,9 @@ clustree(
   label_size = 5,  # 集群编号字体大小
   title = "不同resolution下的聚类演变关系"
 )
-
+# 确定好参数后再跑一次，因为会记录最后一次参数运行的分群数量
+pbmc <- FindNeighbors(pbmc, dims = 1:10)
+pbmc <- FindClusters(pbmc, resolution = 0.5)
 ```
 **FindNeighbors-构建细胞临近图**：基于dims指定的主成分（前十个PC）计算细胞间的距离（通常用欧氏距离）；对每个细胞，筛选出K个细胞（默认k=20）作为邻居并通过距离计算边的权重（距离越近，权重越高）。最后生成的近邻图存储在pbmc@graphs中，用于后续聚类。
 <p style="margin-top: -10px;">
@@ -260,14 +275,78 @@ knitr::include_graphics("images/图片 3.png")
 
 ### **4.4 聚类的可视化**
 FindNeighbors（建图）→ FindClusters（分群，得到标签）→ UMAP/t-SNE（可视化分群结果）
-```{r}
+```{r 聚类的可视化-tSNW, echo=TRUE, results='hide', message=FALSE, warning=FALSE, fig.cap="Fig.10 t-SNE聚类图", fig.align="center"}
 # t-SNE可视化
 pbmc <- RunTSNE(pbmc, dims = 1:10)
-DimPlot(pbmc, reduction = "tsne", group.by = "res.0.5", label = TRUE, label.size = 4)
-# UMAP可视化
-pbmc <- RunUMAP(pbmc, dims = 1:10)
-DimPlot(pbmc, reduction = "umap", group.by = "res.0.5", label = TRUE, label.size = 4)
+DimPlot(pbmc, reduction = "tsne", label = TRUE, label.size = 4)
 ```
 
+```{r 聚类的可视化-UMAP, echo=TRUE, results='hide', message=FALSE, warning=FALSE, fig.cap="Fig.11 t-SNE聚类图", fig.align="center"}
+# UMAP可视化
+pbmc <- RunUMAP(pbmc, dims = 1:10)
+DimPlot(pbmc, reduction = "umap", label = TRUE, label.size = 4)
+```
 
+## **5. 细胞注释**
+### **5.1 FindMarkers计算寻找marker基因**
+```{r 寻找marker, echo=TRUE, results='hide', message=FALSE, warning=FALSE}
+# 当你已初步判断某簇（如簇5）可能是某种细胞类型，想针对性验证它与其他已知簇（如簇 0、3）的差异时使用。
+cluster5.markers <- FindMarkers(pbmc, ident.1 = 5, ident.2 = c(0, 3), min.pct = 0.25)
+# 批量计算所有簇相对于其他所有簇的特异性标记基因，一次性得到每个簇的特征基因。
+pbmc.markers <- FindAllMarkers(pbmc, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+```
 
+### **5.2 查看每一簇最高变化的基因**
+```{r 查看每个簇变化最高的两个基因, echo=TRUE, results='hide', message=FALSE, warning=FALSE, fig.cap="Fig.12 top2 genes气泡图", fig.align="center"}
+# 查看每个簇变化最高的两个基因
+if(!require(dplyr))install.packages("dplyr")
+library(dplyr)
+top2_markers <- pbmc.markers %>% 
+  group_by(cluster) %>% 
+  top_n(n = 2, wt = avg_log2FC)
+
+#  绘制气泡图
+DotPlot(pbmc, 
+        features = top2_markers$gene,  # 使用筛选出的top2基因表格中的基因名
+        cols = c("blue", "red"),  # 颜色渐变（低表达到高表达）
+        dot.scale = 8) +  # 点的最大尺寸
+  RotatedAxis() +  # 基因名垂直显示，避免重叠
+  labs(title = "Top2 genes",
+       x = "genes",
+       y = "cell groups") +
+  theme(plot.title = element_text(hjust = 0.5))  # 标题居中
+
+```
+
+### **5.3 观察特定基因在所有簇中的表达情况**
+**定群的关键步骤**
+```{r, echo=TRUE, results='hide', message=FALSE, warning=FALSE, fig.cap="Fig.13 查看特定基因表达", fig.align="center", fig.width=10}
+VlnPlot(pbmc, features = c("NKG7", "CD14"), slot = "counts", log = TRUE, pt.size = 0)
+```
+根据已知的marker基因通过这一步检查在不同分群的表达，可以确定细胞注释名称。
+**查看细胞marker可在网站**：http://xteam.xbio.top/CellMarker/index.jsp
+
+### **5.4 特征点图-展示指定基因在低维图（UMAP或tSNE）上的表达分布**
+```{r 特征点图, results='hide', message=FALSE, warning=FALSE, fig.cap="Fig.14 特征点图", fig.align="center"}
+FeaturePlot(pbmc, features = c("MS4A1", "GNLY", "CD3E", "CD14", "FCER1A", "FCGR3A", "LYZ"))
+
+```
+
+### **5.5 细胞注释及可视化**
+```{r 细胞注释, results='hide', message=FALSE, warning=FALSE, fig.cap="Fig.15 细胞注释", fig.align="center"}
+# 查看簇的数量和具体标签
+levels(pbmc)
+new.cluster.ids <- c("Naive CD4 T", "CD14+ Mono", "Memory CD4 T", "B", "CD8 T", "FCGR3A+ Mono", "NK", "DC", "Platelet")
+names(new.cluster.ids) <- levels(pbmc)
+pbmc <- RenameIdents(pbmc, new.cluster.ids)
+DimPlot(pbmc, reduction = "umap", label = TRUE, pt.size = 0.5) + NoLegend()
+```
+
+### **5.6 保存为.rds文件**
+```{r 保存及打开rds文件，}
+saveRDS(pbmc,'pbmc.rds')
+pbmc<- readRDS('pbmc.rds')
+#验证rds文件是否正确加载
+DimPlot(pbmc, reduction = "umap", label = TRUE, pt.size = 0.5) + NoLegend()
+```
+当对单细胞注释完成后，可以保存为rds文件格式：分析到细胞注释完成后，核心成果通常是一个 Seurat 对象（包含所有聚类、注释、降维结果等），.rds专为单个对象设计，格式简洁，无需额外存储无关变量。（不用存储为Rdata）
